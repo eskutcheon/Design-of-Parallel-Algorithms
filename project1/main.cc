@@ -27,6 +27,7 @@ struct game_results {
 	move solution[IDIM*JDIM];
 	bool found = false;
 	int size = 0;
+	int solved_by;
 };
 
 void search(unsigned char buf[][IDIM*JDIM], game_results results[], int &batch_size) {
@@ -40,18 +41,24 @@ void search(unsigned char buf[][IDIM*JDIM], game_results results[], int &batch_s
 	}
 }
 
-void record_output(std::ostream &output, game_results &game) {
-	output << "found solution = " << endl;
-	game.start_board.Print(output);
-	for (int i = 0; i < game.size; ++i) {
-		game.start_board.makeMove(game.solution[i]);
-		output << "-->" << endl;
-		game.start_board.Print(output);
+void record_output(std::ostream &output, vector<game_results> &games) {
+	int num_sol = games.size();
+	for(int k = 0; k < num_sol) {
+		output << "found solution = " << endl;
+		games[k].start_board.Print(output);
+		for (int i = 0; i < games[k].size; ++i) {
+			games[k].start_board.makeMove(games[k].solution[i]);
+			output << "-->" << endl;
+			games[k].start_board.Print(output);
+		}
+		output << "solved" << endl;
 	}
-	output << "solved" << endl;
+	cout << "found " << num_sol << " solutions" << endl;
 }
 
-void Server(int argc, char *argv[]) {
+// initial message passing can be done with regular MPI send and recv
+
+void Server(int argc, char *argv[], int num_p) {
 	// Check to make sure the server can run
 	if (argc != 3) {
 		cerr << "two arguments please!" << endl;
@@ -60,7 +67,7 @@ void Server(int argc, char *argv[]) {
 	ifstream input(argv[1], ios::in);	// Input case filename
 	ofstream output(argv[2], ios::out); // Output case filename
 	vector<string> puzzles;				// will essentially act as the bag in the bag of tasks
-	int count = 0;
+	vector<game_results> solved_puzzles;
 	int NUM_GAMES = 0;
 
 	input >> NUM_GAMES; // get the number of games from first line of the input file
@@ -68,19 +75,13 @@ void Server(int argc, char *argv[]) {
 	for (int i = 0; i < NUM_GAMES; ++i) { // for each game in file...
 		string input_string;
 		input >> input_string; // reads line by line
-		if (input_string.size() != IDIM * JDIM) {
+		if (input_string.size() != IDIM*JDIM) {
 			cerr << "something wrong in input file format!" << endl;
 			MPI_Abort(MPI_COMM_WORLD, -1);
-			puzzles.push_back(input_string);
-		} // end if
-	} // end for
-	/* NOTE: Not sure how the lines at the start of the while loop differ after the first use.
-	MPI_ISend almost definitely doesn't need to be called again. It may need to be handled
-	by getting the ranks of idle processors and only doing a send on those.
-	Also, if that's the case, using myId as an index may accidentally allocate games for all
-	processors and delete data that is never passed correctly
-	Also, it's possible that the first send of data only needs regular MPI_Send
-	*/
+		}
+		puzzles.push_back(input_string);
+	}
+
 	unsigned char buf[CHUNK_SIZE] = new unsigned char[IDIM*JDIM]; // new buffer for this iteration's game
 	while (!puzzles.empty()) {
 		// TODO: make the buffer a 2D array where each buffer is a chunk of game strings
@@ -96,12 +97,14 @@ void Server(int argc, char *argv[]) {
 		game_results results[CHUNK_SIZE];
 		search(buf, results, CHUNK_SIZE);
 		// MPI_Recv(results)
-		if (found) {
-			count++;
-			record_output(output, game)
+		for(int i=0; i < CHUNK_SIZE; ++i) {
+			if (results[i].found) {
+				solved_puzzles.push_back(results[i]);
+			}
 		}
 	}
-	cout << "found " << count << " solutions" << endl;
+	// DELETE buf here
+	record_output(output, solved_puzzles);
 }
 
 // Put the code for the client here
@@ -110,11 +113,14 @@ void Client(){
 	// initialize game board. The result that will need to be sent back will either be
 	// the moves required to solve the game or an indication that the game was not solvable.
 	// NOTE: missing final parameter MPI_Request *request
-	MPI_Irecv(buf, IDIM * JDIM * CHUNK_SIZE, MPI_UNSIGNED_CHAR, 0, MPI_ANY_TAG, MPI_COMM_WORLD);
-	// may want to dynamically allocate results array in case Client and Server keep too many in scope
-	game_results results[CHUNK_SIZE];
-	search(buf, results, CHUNK_SIZE);
-	// MPI_ISend(results)
+	while(true){
+		MPI_Irecv(buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, 0, MPI_ANY_TAG, MPI_COMM_WORLD);
+		// may want to dynamically allocate results array in case Client and Server keep too many in scope
+		game_results results[CHUNK_SIZE];
+		search(buf, results, CHUNK_SIZE);
+		// MPI_ISend(results)
+		// if MPI receive value is specific status, break
+	}
 }
 
 int main(int argc, char *argv[]) {
@@ -131,7 +137,7 @@ int main(int argc, char *argv[]) {
 	MPI_Comm_rank(MPI_COMM_WORLD, &myId);
 	if (myId == 0) {// Processor 0 runs the server code
 		get_timer(); // zero the timer
-		Server(argc, argv);
+		Server(argc, argv, numProcessors);
 		// Measure the running time of the server
 		cout << "execution time = " << get_timer() << " seconds." << endl;
 	}
