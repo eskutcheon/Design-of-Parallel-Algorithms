@@ -22,14 +22,12 @@ using std::vector;
 const int CHUNK_SIZE = 8;
 
 struct game_results {
-	// game_state start_board;
-	game_state game_board;
-	move solution[IDIM*JDIM];
-	bool found = false;
-	int size = 0;
-	int solved_by;
+	game_state game_board; 		// initial game board that converts char buffer to game's grid
+	move solution[IDIM*JDIM]; 	// move history that yields a solution to the puzzle
+	bool found = false; 		// solution found
+	int size = 0;				// number of steps used in solution
+	int solved_by;				// processor that worked on the puzzle
 };
-
 
 void search(unsigned char buf[], game_results results[], int batch_size, int rank) {
 	for (int i = 0; i < batch_size; ++i) {
