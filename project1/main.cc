@@ -127,11 +127,11 @@ class Server {
 					solved_puzzles.push_back(results[i]);
 			}
 		// ################## SERVER CHECKING FOR COMPLETED TASKS FROM CLIENTS ####################
-			bool flag = 0;
+			int flag = 0;
 			if(this->puzzles.size() < CHUNK_SIZE)
 				chunk_size_flag = true;
 			for(int i = 0; i < num_proc-1; ++i) {
-				MPI_Iprobe(i+1, ret_result_tag, MPI_COMM_WORLD, &flag);
+				MPI_Iprobe(i+1, ret_result_tag, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
 				if(flag) {
 					game_results rec_buffer[CHUNK_SIZE];
 					// second parameter count is int in docs, so may need to broadcast it
@@ -145,13 +145,14 @@ class Server {
 						unsigned char new_buf[IDIM*JDIM*CHUNK_SIZE];
 						// had this for loop combined with the one above, but it require more conditionals
 						this->puzzle_copy(new_buf, CHUNK_SIZE);
-						MPI_ISend(new_buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, i+1, more_work_tag, MPI_COMM_WORLD, &send_req[i]);
+						MPI_Isend(new_buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, i+1, more_work_tag, MPI_COMM_WORLD, &send_req[i]);
 						MPI_Wait(&send_req[i], MPI_STATUS_IGNORE);
 						if(this->puzzles.size() < CHUNK_SIZE)
 							chunk_size_flag = true;
 					}
 					else
-						MPI_Send(100, 1, MPI_INT, i+1, stop_proc_tag, MPI_COMM_WORLD);
+						unsigned char temp = 65;
+						MPI_Send(&temp, 1, MPI_UNSIGNED_CHAR, i+1, stop_proc_tag, MPI_COMM_WORLD);
 				}
 			}
 		}
@@ -166,7 +167,7 @@ void Client(int rank){
 	// send buf[] to the client processor and use game_board.Init() on the Client to
 	// initialize game board. The result that will need to be sent back will either be
 	// the moves required to solve the game or an indication that the game was not solvable.
-	bool exit_flag = false;
+	int exit_flag = false;
 	bool msg_flag = false;
 	int stop_proc_tag = -1;
 	int more_work_tag = -10;
@@ -180,10 +181,10 @@ void Client(int rank){
 	while(!exit_flag){
 		game_results results[CHUNK_SIZE];
 		search(buf, results, CHUNK_SIZE, rank);
-		MPI_ISend(results, CHUNK_SIZE*sizeof(game_results), MPI_BYTE, 0, ret_result_tag, MPI_COMM_WORLD, &send_req);
+		MPI_Isend(results, CHUNK_SIZE*sizeof(game_results), MPI_BYTE, 0, ret_result_tag, MPI_COMM_WORLD, &send_req);
 		// if MPI receive value is specific status, break
 		MPI_Wait(&send_req, MPI_STATUS_IGNORE);
-		MPI_Iprobe(0, stop_proc_tag, MPI_COMM_WORLD, &exit_flag);
+		MPI_Iprobe(0, stop_proc_tag, MPI_COMM_WORLD, &exit_flag, MPI_STATUS_IGNORE);
 		if(!exit_flag) {
 			MPI_Irecv(buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, 0, more_work_tag, MPI_COMM_WORLD, &recv_req);
 			MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
