@@ -102,13 +102,13 @@ class Server {
 		// unsigned char buf[num_proc-1][IDIM*JDIM*CHUNK_SIZE];
 		MPI_Request send_req[num_proc-1];
 		MPI_Request recv_req[num_proc-1];
-		int stop_proc_tag = -1;
-		int more_work_tag = -10;
-		int ret_result_tag = -100;
+		int stop_proc_tag = 5;
+		int more_work_tag = 10;
+		int ret_result_tag = 100;
 		unsigned char buf[IDIM*JDIM*CHUNK_SIZE];
 		for(int i = 0; i < num_proc-1; ++i) {
 			this->puzzle_copy(buf, CHUNK_SIZE);
-			MPI_Isend(buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, i+1, MPI_ANY_TAG, MPI_COMM_WORLD, &send_req[i]);
+			MPI_Isend(buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, i+1, 1, MPI_COMM_WORLD, &send_req[i]);
 			MPI_Wait(&send_req[i], MPI_STATUS_IGNORE);
 		}
 		/* MPI_IScatter(&buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR,
@@ -150,9 +150,10 @@ class Server {
 						if(this->puzzles.size() < CHUNK_SIZE)
 							chunk_size_flag = true;
 					}
-					else
+					else {
 						unsigned char temp = 65;
 						MPI_Send(&temp, 1, MPI_UNSIGNED_CHAR, i+1, stop_proc_tag, MPI_COMM_WORLD);
+					}
 				}
 			}
 		}
@@ -169,9 +170,9 @@ void Client(int rank){
 	// the moves required to solve the game or an indication that the game was not solvable.
 	int exit_flag = false;
 	bool msg_flag = false;
-	int stop_proc_tag = -1;
-	int more_work_tag = -10;
-	int ret_result_tag = -100;
+	int stop_proc_tag = 5;
+	int more_work_tag = 10;
+	int ret_result_tag = 100;
 	MPI_Request send_req;
 	MPI_Request recv_req;
 	unsigned char buf[IDIM*JDIM*CHUNK_SIZE];
