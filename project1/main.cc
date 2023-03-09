@@ -20,7 +20,10 @@ using std::ofstream;
 using std::string;
 using std::vector;
 
-const int CHUNK_SIZE = 12;
+const int CHUNK_SIZE = 16;
+int STOP_PROC_TAG = 5;
+int MORE_WORK_TAG = 10;
+int RET_RESULT_TAG = 100;
 
 struct game_results {
 	game_state game_board; 		// initial game board that converts char buffer to game's grid
@@ -68,6 +71,7 @@ class Server {
 			}
 			this->puzzles.push_back(input_string);
 		}
+		this->input.close();
 	}
 
 	void record_output(vector<game_results> &games) {
@@ -84,6 +88,7 @@ class Server {
 			this->output << "solved" << endl;
 		}
 		cout << "found " << num_sol << " solutions" << endl;
+		this->output.close();
 	}
 
 	void puzzle_copy(unsigned char buffer[], int batch_size) {
@@ -107,6 +112,7 @@ class Server {
 	}
 
 	void solve_puzzles(int num_proc) {
+		cout << "ENTERING MAIN FUNCTION OF THE SERVER" << endl;
 		vector<game_results> solved_puzzles;
 		int SERVER_CHUNK = 0.25*CHUNK_SIZE;
 		bool chunk_size_flag = false;
@@ -114,9 +120,6 @@ class Server {
 		// unsigned char buf[num_proc-1][IDIM*JDIM*CHUNK_SIZE];
 		MPI_Request send_req[num_proc-1];
 		// MPI_Status recv_req[num_proc-1];
-		int stop_proc_tag = 5;
-		int more_work_tag = 10;
-		int ret_result_tag = 100;
 		int test_flag;
 		unsigned char buf[IDIM*JDIM*CHUNK_SIZE];
 		for(int i = 0; i < num_proc-1; ++i) {
@@ -125,48 +128,54 @@ class Server {
 			//MPI_Wait(&send_req[i], MPI_STATUS_IGNORE);
 			num_puzzles -= CHUNK_SIZE;
 		}
+		cout << "COMPLETED INITIAL DISTRIBUTION OF WORK; PUZZLES REMAINING: " << num_puzzles << endl;
 		// unsigned char buf[CHUNK_SIZE] = new unsigned char[IDIM*JDIM]; // new buffer for this iteration's game
 		while (num_puzzles > 0) {
 		// ########################### SERVER DOING TASKS ############################
 			if(chunk_size_flag) {
+				cout << "ENTERED FINAL STAGE OF SERVER WHERE IT COMPLETES THE LAST PUZZLES.";
+				cout << endl << "PUZZLES REMAINING: " << num_puzzles << endl;
 				SERVER_CHUNK = this->puzzles.size();
 				this->solve_locally(solved_puzzles, SERVER_CHUNK);
 				num_puzzles -= SERVER_CHUNK;
 				break;
 			}
 		// ################## SERVER CHECKING FOR COMPLETED TASKS FROM CLIENTS ####################
-			if(num_puzzles < CHUNK_SIZE)
-				chunk_size_flag = true;
-			//MPI_Iprobe(i+1, ret_result_tag, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
+			chunk_size_flag = (num_puzzles < CHUNK_SIZE);
+			//MPI_Iprobe(i+1, RET_RESULT_TAG, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
 			game_results recv_buffer[CHUNK_SIZE];
 			MPI_Request recv_request;
 			MPI_Status recv_status;
-			MPI_Irecv(&recv_buffer, CHUNK_SIZE*sizeof(game_results), MPI_BYTE, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &recv_request);
-			MPI_Request_get_status(recv_request, &test_flag, &recv_status);
+			MPI_Irecv(&recv_buffer, CHUNK_SIZE*sizeof(game_results), MPI_BYTE, MPI_ANY_SOURCE, RET_RESULT_TAG, MPI_COMM_WORLD, &recv_request);
+			MPI_Wait(&recv_request, &recv_status);
+			// cout << "COMPLETED MPI_Irecv ON THE SERVER SIDE" << endl;
 			int idle_proc = recv_status.MPI_SOURCE;
-			if(test_flag) {
-				for(int k = 0; k < CHUNK_SIZE; ++k) {
-					if(recv_buffer[k].found)
-						solved_puzzles.push_back(recv_buffer[k]);
-				}
+			// cout << "SANITY CHECK OF RECEIVING PROCESSOR ID: " << idle_proc << endl;
+			for(int k = 0; k < CHUNK_SIZE; ++k) {
+				if(recv_buffer[k].found)
+					solved_puzzles.push_back(recv_buffer[k]);
 			}
-			else
-				MPI_Wait(&recv_request, MPI_STATUS_IGNORE);
 			// MPI_Irecv(recv_buffer, CHUNK_SIZE*sizeof(game_results), MPI_BYTE, i+1, MPI_ANY_TAG, MPI_COMM_WORLD, &recv_req[i]);
 			// MPI_Wait(&recv_req[i], MPI_STATUS_IGNORE);
 			if(!chunk_size_flag) {
 				unsigned char new_buf[IDIM*JDIM*CHUNK_SIZE];
 				this->puzzle_copy(new_buf, CHUNK_SIZE);
-				MPI_Send(new_buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, idle_proc, more_work_tag, MPI_COMM_WORLD); // for Isend: &send_req[idle_proc-1]
+				MPI_Send(new_buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, idle_proc, 1, MPI_COMM_WORLD); // for Isend: &send_req[idle_proc-1]
 				//MPI_Wait(&send_req[i], MPI_STATUS_IGNORE);
 				num_puzzles -= CHUNK_SIZE;
-				if(num_puzzles < CHUNK_SIZE)
-					chunk_size_flag = true;
+				chunk_size_flag = (num_puzzles < CHUNK_SIZE);
+				// cout << "MORE WORK DISTRIBUTED TO PROCESS " << idle_proc << endl;
+				// cout << "puzzles remaining: " << num_puzzles << endl;
 			}
 			else {
-				MPI_Send(buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, idle_proc, stop_proc_tag, MPI_COMM_WORLD);
+				// send last used buffer without update, giving the stop_proc tag for each client to exit
+				for(int i = 0; i < num_proc-1; ++i) {
+					MPI_Send(buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, i+1, STOP_PROC_TAG, MPI_COMM_WORLD);
+					cout << "ENDING PROCESS " << i+1 << endl;
+				}
 			}
 		}
+		cout << "EXITING THE MAIN WHILE LOOP IN SERVER" << endl;
 		// DELETE buf here
 		this->record_output(solved_puzzles);
 	}
@@ -178,34 +187,34 @@ void Client(int rank){
 	// send buf[] to the client processor and use game_board.Init() on the Client to
 	// initialize game board. The result that will need to be sent back will either be
 	// the moves required to solve the game or an indication that the game was not solvable.
+	cout << "ENTERING CLIENT FUNCTION FOR PROCESS " << rank << endl;
 	bool exit_flag = false;
 	bool msg_flag = false;
-	int stop_proc_tag = 5;
-	int more_work_tag = 10;
-	int ret_result_tag = 100;
 	MPI_Request send_req;
 	MPI_Request recv_req;
 	MPI_Status recv_status;
 	unsigned char buf[IDIM*JDIM*CHUNK_SIZE]; // receive buffer
 	MPI_Recv(buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &recv_status);
+	game_results results[CHUNK_SIZE];
 
 	while(!exit_flag){
-		game_results results[CHUNK_SIZE];
 		search(buf, results, CHUNK_SIZE, rank);
-		MPI_Send(results, CHUNK_SIZE*sizeof(game_results), MPI_BYTE, 0, ret_result_tag, MPI_COMM_WORLD);
+		MPI_Send(results, CHUNK_SIZE*sizeof(game_results), MPI_BYTE, 0, RET_RESULT_TAG, MPI_COMM_WORLD);
 		// if MPI receive value is specific status, break
 		//MPI_Wait(&send_req, MPI_STATUS_IGNORE);
 		MPI_Recv(buf, IDIM*JDIM*CHUNK_SIZE, MPI_UNSIGNED_CHAR, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &recv_status);
-		//MPI_Iprobe(0, stop_proc_tag, MPI_COMM_WORLD, &exit_flag, MPI_STATUS_IGNORE);
-		if(recv_status.MPI_TAG == stop_proc_tag)
+		//MPI_Iprobe(0, STOP_PROC_TAG, MPI_COMM_WORLD, &exit_flag, MPI_STATUS_IGNORE);
+		if(recv_status.MPI_TAG == STOP_PROC_TAG)
 			exit_flag = true;
 	}
+	cout << "PROCESS " << rank << " EXITING NOW." << endl;
 }
 
 int main(int argc, char *argv[]) {
 	// This is a utility routine that installs an alarm to kill off this
 	// process if it runs to long.  This will prevent jobs from hanging
 	// on the queue keeping others from getting their work done.
+	get_timer();
 	chopsigs_();
 	// All MPI programs must call this function
 	MPI_Init(&argc, &argv);
@@ -214,6 +223,7 @@ int main(int argc, char *argv[]) {
 	/* Get the number of processors and my processor identification */
 	MPI_Comm_size(MPI_COMM_WORLD, &numProcessors);
 	MPI_Comm_rank(MPI_COMM_WORLD, &myId);
+	cout << "TIME TAKEN IN main() PRIOR TO ENTERING SERVER AND CLIENT: " << get_timer() << endl;
 	if (myId == 0) {// Processor 0 runs the server code
 		get_timer(); // zero the timer
 		Server server_process(argc, argv);
@@ -224,6 +234,8 @@ int main(int argc, char *argv[]) {
 	else {// all other processors run the client code.
 		Client(myId);
 	}
+	get_timer();
 	// All MPI programs must call this before exiting
+	cout << "HITTING MPI_Finalize" << endl;
 	MPI_Finalize();
 }
